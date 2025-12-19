@@ -311,7 +311,7 @@ SELECT * FROM ranked_customer_sales;
 
 -- BONUS DATASET FOR VISUALIZATION
 CREATE OR REPLACE VIEW ranked_customer_sales_with_points AS
-WITH base AS (
+WITH CTE AS (
     SELECT
         s.customer_id,
         s.order_date,
@@ -335,7 +335,6 @@ SELECT
     product_name,
     price,
     member,
-
     -- ranking only applies to member purchases
     CASE
         WHEN member = 'N' THEN NULL
@@ -344,7 +343,6 @@ SELECT
             ORDER BY order_date
         )
     END AS rnk,
-
     -- points earned per purchase
     CASE
         WHEN member = 'Y'
@@ -354,6 +352,5 @@ SELECT
             THEN price * 10 * 2
         ELSE price * 10
     END AS points
-
-FROM base;
+FROM CTE;
 SELECT * FROM ranked_customer_sales_with_points;
