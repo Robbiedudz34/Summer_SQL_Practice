@@ -311,46 +311,26 @@ SELECT * FROM ranked_customer_sales;
 
 -- BONUS DATASET FOR VISUALIZATION
 CREATE OR REPLACE VIEW ranked_customer_sales_with_points AS
-WITH CTE AS (
-    SELECT
-        s.customer_id,
-        s.order_date,
-        mu.product_name,
-        mu.price,
-        mb.join_date,
+WITH PRE_CALC_DATA AS (
+    SELECT s.customer_id, s.order_date, mu.product_name, mu.price, mb.join_date,
         CASE
             WHEN mb.join_date IS NULL THEN 'N'
             WHEN mb.join_date > s.order_date THEN 'N'
             ELSE 'Y'
         END AS member
     FROM sales AS s
-    INNER JOIN menu AS mu
-        ON s.product_id = mu.product_id
-    LEFT JOIN members AS mb
-        ON s.customer_id = mb.customer_id
+    INNER JOIN menu AS mu ON s.product_id = mu.product_id
+    LEFT JOIN members AS mb ON s.customer_id = mb.customer_id
 )
-SELECT
-    customer_id,
-    order_date,
-    product_name,
-    price,
-    member,
-    -- ranking only applies to member purchases
+SELECT customer_id, order_date, product_name, price, member,
     CASE
         WHEN member = 'N' THEN NULL
-        ELSE RANK() OVER (
-            PARTITION BY customer_id
-            ORDER BY order_date
-        )
+        ELSE RANK() OVER (PARTITION BY customer_id ORDER BY order_date)
     END AS rnk,
-    -- points earned per purchase
     CASE
-        WHEN member = 'Y'
-             AND DATEDIFF(order_date, join_date) BETWEEN 0 AND 6
-            THEN price * 10 * 2
-        WHEN product_name = 'sushi'
-            THEN price * 10 * 2
+        WHEN member = 'Y' AND DATEDIFF(order_date, join_date) BETWEEN 0 AND 6 THEN price * 10 * 2
+        WHEN product_name = 'sushi' THEN price * 10 * 2
         ELSE price * 10
     END AS points
-FROM CTE;
+FROM PRE_CALC_DATA;
 SELECT * FROM ranked_customer_sales_with_points;
