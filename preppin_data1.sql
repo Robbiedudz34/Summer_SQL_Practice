@@ -47,9 +47,9 @@ CREATE OR REPLACE VIEW cleaned_data AS
 			SUBSTRING_INDEX(transaction_code, '-', 1) AS bank,
 			STR_TO_DATE(substring_index(transaction_date, ' ', 1), '%d/%m/%Y') AS date_real
 		FROM pd2023_wk01
-	) t
+	) AS t
 ;
-
+select * from cleaned_data;
 /*
 Different levels of detail are required in the outputs. 
 You will need to sum up the values of the transactions in three ways:
