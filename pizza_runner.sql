@@ -63,7 +63,7 @@ If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for 
 E. Bonus Questions
 If Danny wants to expand his range of pizzas - how would this impact the existing data design? Write an INSERT statement to demonstrate what would happen if a new Supreme pizza with all the toppings was added to the Pizza Runner menu?
 */
-
+USE pizza_runner;
 -- Investigate Data and Handle Nulls:
 SELECT * FROM runners; 			-- no nulls
 SELECT * FROM runner_orders; 	-- nulls in pickup, distance, duration, cancellation
@@ -384,3 +384,548 @@ END AS pct_both
 FROM cancels
 ;
 
+
+/*
+C. Ingredient Optimisation
+What are the standard ingredients for each pizza?
+What was the most commonly added extra?
+What was the most common exclusion?
+Generate an order item for each record in the customers_orders table in the format of one of the following:
+Meat Lovers
+Meat Lovers - Exclude Beef
+Meat Lovers - Extra Bacon
+Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers
+Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
+For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+*/
+
+-- What are the standard ingredients for each pizza?
+SELECT
+    t.topping_name AS Toppings_On_All_Pizzas
+FROM
+	pizza_recipes AS r
+INNER JOIN JSON_TABLE(
+CONCAT('[', r.toppings, ']'),
+'$[*]' COLUMNS (
+	topping_id INT PATH '$'
+	)
+) jt ON TRUE
+INNER JOIN pizza_toppings AS t
+	ON jt.topping_id = t.topping_id
+INNER JOIN pizza_names AS n
+	ON r.pizza_id = n.pizza_id
+GROUP BY t.topping_name
+HAVING COUNT(DISTINCT r.pizza_id) = 2;
+
+-- What was the most commonly added extra?
+SELECT
+    t.topping_name AS most_added_topping
+--    COUNT(*) AS count_of_adds
+FROM
+	customer_orders as c
+INNER JOIN JSON_TABLE(
+CONCAT('[', c.extras, ']'),
+'$[*]' COLUMNS (
+	topping_id INT PATH '$'
+	)
+) jt ON TRUE
+INNER JOIN pizza_toppings AS t
+	ON jt.topping_id = t.topping_id
+WHERE c.extras IS NOT NULL
+GROUP BY t.topping_name
+ORDER BY COUNT(*) DESC
+LIMIT 1;
+
+-- What was the most common exclusion?
+SELECT
+    t.topping_name AS most_common_exclusion,
+    COUNT(*) AS count_of_removals
+FROM
+	customer_orders as c
+INNER JOIN JSON_TABLE(
+CONCAT('[', c.exclusions, ']'),
+'$[*]' COLUMNS (
+	topping_id INT PATH '$'
+	)
+) jt ON TRUE
+INNER JOIN pizza_toppings AS t
+	ON jt.topping_id = t.topping_id
+WHERE c.exclusions IS NOT NULL
+GROUP BY t.topping_name
+ORDER BY COUNT(*) DESC
+LIMIT 1;
+
+/*
+Generate an order item for each record in the customers_orders table in the format of one of the following:
+Meat Lovers
+Meat Lovers - Exclude Beef
+Meat Lovers - Extra Bacon
+Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers
+*/
+WITH included AS (
+	SELECT
+		c.order_id,
+		c.pizza_id,
+		group_concat(DISTINCT t.topping_name ORDER BY t.topping_name SEPARATOR ', ') AS toppings_added
+	FROM
+		customer_orders as c
+	INNER JOIN JSON_TABLE(
+	CONCAT('[', c.extras, ']'),
+	'$[*]' COLUMNS (
+		topping_id INT PATH '$'
+		)
+	) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+	WHERE c.extras IS NOT NULL
+	GROUP BY c.order_id, c.pizza_id
+), excluded AS (
+	SELECT
+		c.order_id,
+		c.pizza_id,
+		group_concat(DISTINCT t.topping_name ORDER BY t.topping_name SEPARATOR ', ') AS toppings_removed
+	FROM
+		customer_orders as c
+	INNER JOIN JSON_TABLE(
+	CONCAT('[', c.exclusions, ']'),
+	'$[*]' COLUMNS (
+		topping_id INT PATH '$'
+		)
+	) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+	WHERE c.exclusions IS NOT NULL
+	GROUP BY c.order_id, c.pizza_id
+)
+SELECT
+	c.order_id,
+	CONCAT(CASE WHEN n.pizza_name = 'Meatlovers' THEN 'Meat Lovers' ELSE n.pizza_name END,
+		COALESCE(CONCAT(' - Exclude ', toppings_removed), ''),
+		COALESCE(CONCAT(' - Extra ', toppings_added), '')) AS Order_Made
+FROM
+	customer_orders as c
+LEFT JOIN included as i on i.order_id = c.order_id and i.pizza_id = c.pizza_id
+LEFT JOIN excluded as e on e.order_id = c.order_id and e.pizza_id = c.pizza_id
+INNER JOIN pizza_names AS n on n.pizza_id = c.pizza_id;
+
+
+-- Generate an alphabetically ordered comma separated ingredient list for each pizza order 
+-- from the customer_orders table and add a 2x in front of any relevant ingredients
+-- For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+WITH pizzas AS(
+	SELECT
+		order_id,
+        pizza_id,
+        ROW_NUMBER() OVER(PARTITION BY order_id, pizza_id ORDER BY order_id) AS pizza_instance,
+        exclusions,
+        extras
+	FROM
+		customer_orders
+), standard AS(
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        1 AS delta
+	FROM
+		pizzas as p
+	INNER JOIN pizza_recipes as r
+		ON p.pizza_id = r.pizza_id
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', r.toppings, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) AS jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), included AS (
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        1 AS delta
+	FROM
+		pizzas as p
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', p.extras, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), excluded AS (
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        -1 AS delta
+	FROM
+		pizzas AS p
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', p.exclusions, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), all_toppings AS (
+	SELECT * FROM standard
+	UNION ALL
+    SELECT * FROM included
+    UNION ALL
+    SELECT * FROM excluded
+), aggregated AS (
+	SELECT
+		order_id,
+        pizza_id,
+        pizza_instance,
+        topping_name,
+        SUM(delta) AS quantity
+	FROM
+		all_toppings
+	GROUP BY
+		order_id,
+        pizza_id,
+        pizza_instance,
+        topping_name
+	HAVING SUM(delta) > 0
+)
+SELECT
+	a.order_id,
+	CONCAT(
+		CASE WHEN n.pizza_name = 'Meatlovers' THEN 'Meat Lovers' ELSE n.pizza_name END,
+		': ',
+        GROUP_CONCAT(
+			CASE WHEN quantity = 1 THEN topping_name
+				ELSE CONCAT(quantity, 'x', topping_name)
+            END
+            ORDER BY topping_name
+            SEPARATOR ', '
+		)
+	) AS pizza_description
+FROM
+	aggregated AS a
+INNER JOIN pizza_names as n
+		ON n.pizza_id = a.pizza_id
+GROUP BY
+	a.order_id,
+	a.pizza_id,
+	a.pizza_instance,
+	n.pizza_name
+ORDER BY a.order_id;
+
+
+-- What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+WITH pizzas AS(
+	SELECT
+		order_id,
+        pizza_id,
+        ROW_NUMBER() OVER(PARTITION BY order_id, pizza_id ORDER BY order_id) AS pizza_instance,
+        exclusions,
+        extras
+	FROM
+		customer_orders
+), standard AS(
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        1 AS delta
+	FROM
+		pizzas as p
+	INNER JOIN pizza_recipes as r
+		ON p.pizza_id = r.pizza_id
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', r.toppings, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) AS jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), included AS (
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        1 AS delta
+	FROM
+		pizzas as p
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', p.extras, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), excluded AS (
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        -1 AS delta
+	FROM
+		pizzas AS p
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', p.exclusions, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), all_toppings AS (
+	SELECT * FROM standard
+	UNION ALL
+    SELECT * FROM included
+    UNION ALL
+    SELECT * FROM excluded
+), aggregated AS (
+	SELECT
+		order_id,
+        pizza_id,
+        pizza_instance,
+        topping_name,
+        SUM(delta) AS quantity
+	FROM
+		all_toppings
+	GROUP BY
+		order_id,
+        pizza_id,
+        pizza_instance,
+        topping_name
+	HAVING SUM(delta) > 0
+)
+SELECT 
+	a.topping_name, 
+	SUM(a.quantity) AS total 
+FROM 
+	aggregated AS a
+INNER JOIN runner_orders AS r
+	ON a.order_id = r.order_id
+WHERE r.cancellation IS NULL
+GROUP BY a.topping_name
+ORDER BY SUM(a.quantity) DESC, topping_name;
+
+
+/*
+D. Pricing and Ratings
+If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes - how much money has Pizza Runner made so far if there are no delivery fees?
+What if there was an additional $1 charge for any pizza extras?
+Add cheese is $1 extra
+The Pizza Runner team now wants to add an additional ratings system that allows customers to rate their runner, how would you design an additional table for this new dataset - generate a schema for this new table and insert your own data for ratings for each successful customer order between 1 to 5.
+Using your newly generated table - can you join all of the information together to form a table which has the following information for successful deliveries?
+customer_id
+order_id
+runner_id
+rating
+order_time
+pickup_time
+Time between order and pickup
+Delivery duration
+Average speed
+Total number of pizzas
+If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled - how much money does Pizza Runner have left over after these deliveries?
+*/
+
+/*
+1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes - 
+how much money has Pizza Runner made so far if there are no delivery fees?
+*/
+
+WITH costs AS(
+	SELECT
+		c.order_id,
+        c.pizza_id,
+		CASE
+			WHEN n.pizza_name = 'Meatlovers' THEN 12
+			WHEN n.pizza_name = 'Vegetarian' THEN 10
+		END AS pizza_cost
+	FROM
+		customer_orders as c
+	INNER JOIN runner_orders AS r
+		ON c.order_id = r.order_id
+	INNER JOIN pizza_names AS n
+		ON c.pizza_id = n.pizza_id
+	WHERE r.cancellation IS NULL
+)
+SELECT
+	CONCAT(
+		'$',
+		SUM(pizza_cost)
+        ) AS earnings
+FROM costs;
+
+
+-- 2. What if there was an additional $1 charge for any pizza extras?
+
+ WITH pizzas AS(
+	SELECT
+		order_id,
+        pizza_id,
+        ROW_NUMBER() OVER(PARTITION BY order_id, pizza_id ORDER BY order_id) AS pizza_instance,
+        exclusions,
+        extras
+	FROM
+		customer_orders
+), extra_unpack AS (
+	SELECT
+		p.order_id,
+		p.pizza_id,
+        p.pizza_instance,
+		t.topping_name,
+        1 AS delta
+	FROM
+		pizzas as p
+	INNER JOIN JSON_TABLE(
+		CONCAT('[', p.extras, ']'),
+		'$[*]' COLUMNS (topping_id INT PATH '$')
+		) jt ON TRUE
+	INNER JOIN pizza_toppings AS t
+		ON jt.topping_id = t.topping_id
+), count_extras AS(
+	SELECT
+		order_id,
+        pizza_id,
+        pizza_instance,
+		SUM(delta) AS extra_quantity
+	FROM
+		extra_unpack
+	GROUP BY order_id, pizza_id, pizza_instance
+), costs AS(
+	SELECT
+		p.order_id,
+        p.pizza_id,
+        p.pizza_instance,
+		CASE
+			WHEN n.pizza_name = 'Meatlovers' THEN 12
+			WHEN n.pizza_name = 'Vegetarian' THEN 10
+		END AS pizza_cost,
+        COALESCE(ct.extra_quantity, 0) AS extra_quantity
+	FROM
+		pizzas AS p
+	LEFT JOIN count_extras as ct
+		ON p.order_id = ct.order_id
+        AND p.pizza_id = ct.pizza_id
+        AND p.pizza_instance = ct.pizza_instance
+	INNER JOIN runner_orders AS r
+		ON p.order_id = r.order_id
+	INNER JOIN pizza_names AS n
+		ON p.pizza_id = n.pizza_id
+	WHERE r.cancellation IS NULL
+)
+SELECT
+	CONCAT(
+		'$',
+		SUM(pizza_cost + extra_quantity)
+        ) AS earnings
+FROM costs;
+-- verified, only 4 extras delivered
+
+/*
+The Pizza Runner team now wants to add an additional 
+ratings system that allows customers to rate their runner, 
+how would you design an additional table for this new dataset - 
+generate a schema for this new table and insert your own data for 
+ratings for each successful customer order between 1 to 5.
+*/
+
+-- New table
+CREATE TABLE IF NOT EXISTS runner_ratings (
+	rating_id INT AUTO_INCREMENT PRIMARY KEY,
+	order_id INT NOT NULL,
+    runner_id INT NOT NULL,
+    rating TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    rating_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- random applicable data for new table
+INSERT INTO runner_ratings (order_id, runner_id, rating) VALUES
+(1, 1, 5),
+(2, 1, 4),
+(3, 1, 5),
+(4, 2, 3),
+(5, 3, 4),
+(7, 2, 5),
+(8, 2, 4),
+(10, 1, 5);
+
+/*
+Using your newly generated table - can you join all of the 
+information together to form a table which has the following
+ information for successful deliveries?
+customer_id
+order_id
+runner_id
+rating
+order_time
+pickup_time
+Time between order and pickup
+Delivery duration
+Average speed
+Total number of pizzas
+*/
+
+WITH pizza_counts AS (
+	SELECT
+		order_id,
+        COUNT(*) AS total_pizzas
+	FROM customer_orders
+    GROUP BY order_id
+)
+SELECT 
+	c.customer_id,
+	r.order_id,
+    r.runner_id,
+    rat.rating,
+    c.order_time,
+    r.pickup_time,
+    
+    -- Time diff calculation
+   	CONCAT(ROUND(TIMESTAMPDIFF(minute, c.order_time, r.pickup_time)), ' min') AS elapsed_time,
+    
+    r.duration,
+    
+    -- Avg speed calc
+    ROUND(r.distance / r.duration, 2) as avg_speed,
+    
+    p.total_pizzas
+FROM
+	runner_orders as r
+JOIN customer_orders as c
+	ON r.order_id = c.order_id
+JOIN pizza_counts as p
+	ON r.order_id = p.order_id
+LEFT JOIN runner_ratings as rat
+	ON r.order_id = rat.order_id
+WHERE r.cancellation IS NULL;
+
+
+/*
+If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices 
+with no cost for extras and each runner is paid 
+$0.30 per kilometre traveled - how much money 
+does Pizza Runner have left over after these deliveries?
+*/
+WITH costs AS(
+	SELECT
+		c.order_id,
+        c.pizza_id,
+        r.distance,
+		CASE
+			WHEN n.pizza_name = 'Meatlovers' THEN 12
+			WHEN n.pizza_name = 'Vegetarian' THEN 10
+		END AS pizza_cost
+	FROM
+		customer_orders as c
+	INNER JOIN runner_orders AS r
+		ON c.order_id = r.order_id
+	INNER JOIN pizza_names AS n
+		ON c.pizza_id = n.pizza_id
+	WHERE r.cancellation IS NULL
+)
+SELECT
+	CONCAT(
+		'$',
+		ROUND(SUM(pizza_cost) - SUM(distance * 0.3), 2)
+        ) AS company_earnings
+FROM costs;
