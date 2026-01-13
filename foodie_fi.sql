@@ -124,7 +124,8 @@ LEFT JOIN subscriptions as s2
     AND s1.start_date < s2.start_date
     AND s2.start_date <= '2020-12-31'
     WHERE s1.start_date <= '2020-12-31'
-    AND s2.customer_id IS NULL -- exclude rows with a matching counterpart to get the latest update for each customer_id
+-- exclude rows with a matching counterpart to get the latest update for each customer_id
+    AND s2.customer_id IS NULL 
 )
 SELECT
 	p.plan_name,
